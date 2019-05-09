@@ -1,0 +1,134 @@
+// mpxv7002dp or 50010 an to a0 power to 5v ground to gnd
+// gy-89 power to 3.3v gnd to gnd sda to a4 scl to a5
+#include <SFE_BMP180.h>
+#include <Wire.h>
+#include <LSM303.h>
+#define ROUNDFACTORH 5
+SFE_BMP180 pressure;
+LSM303 compass;
+double baseline; // baseline pressure
+float time;
+float ref_pressure, air_pressure, pressure_diff;
+float airspeed_ratio = 1.54679; // 2/? (? = 1,225 kg/m3 )
+float airspeed;
+int AIRSPEED_CH = A0;
+void setup()
+{
+  int i;
+  Serial.begin(9600);
+  Wire.begin();
+  compass.init();
+  compass.enableDefault();
+  Serial.println("REBOOT");
+  if (pressure.begin())
+    Serial.println("BMP180 init success");
+  else
+  {
+    Serial.println("BMP180 init fail (disconnected?)\n\n");
+    while (1); // Pause forever.
+  }
+  baseline = 1034;  // need an option to adjust this for user selectable qnh with inhg or mb option,
+  Serial.print("baseline pressure: ");
+  Serial.print(baseline);
+  Serial.println(" mb");
+  Serial.print(baseline / 33.864); // converts mb to inhg
+  Serial.println(" InHg");
+  compass.m_min = (LSM303::vector<int16_t>) { // compass caibration
+    -3241, -2709, -3275
+  };
+  compass.m_max = (LSM303::vector<int16_t>) {
+    +3376, +3944, +3681
+  };
+  ref_pressure = analogRead(AIRSPEED_CH);
+
+  for (i = 1; i <= 200; i++)
+  {
+    ref_pressure = (analogRead(AIRSPEED_CH)) * 0.25 + ref_pressure * 0.75;
+
+    delay(20);
+  }
+}
+void loop()
+{
+  double a, P;
+  int alt;
+  P = getPressure();
+  a = pressure.altitude(P, baseline);
+  alt = a * 3.28084;
+
+  float heading = compass.heading();
+  int valh = heading;
+  int remh;
+  int rounded;
+  rounded = 10 * round(alt / 10.0);
+  compass.read();
+
+
+
+  if ((millis() - time) >= 20)
+  {
+    time = millis();
+
+    air_pressure = analogRead(AIRSPEED_CH) * 0.25 + air_pressure * 0.75;
+
+    if (air_pressure >= ref_pressure)
+    {
+      pressure_diff = air_pressure - ref_pressure;
+    }
+    else
+    {
+      pressure_diff = 0.0;
+    }
+
+    airspeed = sqrt(pressure_diff * airspeed_ratio);
+    airspeed = (airspeed * 3.6) * 0.621371;
+  }
+  // round heading
+  remh = valh % ROUNDFACTORH ;
+  if (remh < 3)
+    valh -= remh;
+  else
+    valh += ROUNDFACTORH - remh;
+
+  Serial.print("Altitude: ");
+  Serial.print(rounded); // rounded alt
+  //Serial.print(a * 3.28084, 0); // meters converted to feet
+  Serial.println(" feet");
+  Serial.print("Heading: ");
+  Serial.print(valh); // rounded heading
+  Serial.println("*");
+  Serial.print("Airspeed: ");
+  Serial.print(airspeed, 0);
+  Serial.println(" MPH");
+  delay(500);
+}
+double getPressure()
+{
+  char status;
+  double T, P, p0, a;
+  status = pressure.startTemperature();
+  if (status != 0)
+  {
+    delay(status);
+    status = pressure.getTemperature(T);
+    if (status != 0)
+    {
+      status = pressure.startPressure(3);
+      if (status != 0)
+      {
+        // Wait for the measurement to complete:
+        delay(status);
+
+        status = pressure.getPressure(P, T);
+        if (status != 0)
+        {
+          return (P);
+        }
+        else Serial.println("error retrieving pressure measurement\n");
+      }
+      else Serial.println("error starting pressure measurement\n");
+    }
+    else Serial.println("error retrieving temperature measurement\n");
+  }
+  else Serial.println("error starting temperature measurement\n");
+}
